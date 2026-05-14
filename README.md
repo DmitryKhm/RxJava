@@ -256,6 +256,5 @@ Observable.just("10", "bad", "30")
 
 // 5. CompletableFuture-стиль через submit() (из ThreadPool-задания)
 CompletableFuture.supplyAsync(() -> heavyComputation(), Schedulers.computation()::execute);
-```
-#   R x J a v a  
+``` 
  
