@@ -7,7 +7,7 @@ OUT=out
 
 echo "=== Compiling ==="
 mkdir -p $OUT
-find $SRC_MAIN $SRC_TEST -name "*.java" | xargs javac --release 21 -d $OUT
+find $SRC_MAIN $SRC_TEST -name "*.java" | xargs javac --release 17 -d $OUT
 
 echo ""
 echo "=== Running Tests ==="

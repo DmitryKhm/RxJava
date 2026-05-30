@@ -1,89 +1,156 @@
-# Mini-RxJava — Отчёт
+# Mini-RxJava - отчет
+
+Репозиторий содержит учебную реализацию основных идей RxJava: `Observable`, `Observer`,
+операторы преобразования, планировщики потоков, обработку ошибок и отмену подписки.
+
+## Быстрый запуск
+
+Для Windows:
+
+```powershell
+.\run.cmd
+```
+
+Альтернативно через PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+
+Для Linux/macOS или Git Bash:
+
+```bash
+bash run.sh
+```
+
+Скрипты компилируют исходный код из `src/main/java` и тесты из `src/test/java`, затем
+запускают тестовый набор `rx.RxTests` и демонстрационную программу `demo.Demo`.
 
 ## Структура проекта
 
-```
+```text
 src/
-├── main/java/
-│   ├── rx/
-│   │   ├── core/
-│   │   │   ├── Observer.java          — интерфейс с onNext / onError / onComplete
-│   │   │   ├── Emitter.java           — handle для пользовательского кода внутри create()
-│   │   │   ├── SafeObserver.java      — обёртка, обеспечивающая контракт Rx
-│   │   │   └── Observable.java        — холодный поток: create, just, map, filter, flatMap,
-│   │   │                                subscribeOn, observeOn, subscribe
-│   │   ├── disposable/
-│   │   │   ├── Disposable.java        — интерфейс отмены подписки
-│   │   │   └── AtomicDisposable.java  — потокобезопасная реализация на AtomicBoolean
-│   │   └── schedulers/
-│   │       ├── Scheduler.java         — интерфейс: execute(Runnable)
-│   │       └── Schedulers.java        — три реализации + фабрика
-│   └── demo/
-│       └── Demo.java                  — демонстрационная программа (8 сценариев)
-└── test/java/
-    └── rx/
-        └── RxTests.java               — 24 юнит-теста без внешних зависимостей
-run.sh                                 — компиляция и запуск
+|-- main/java/
+|   |-- demo/
+|   |   `-- Demo.java
+|   `-- rx/
+|       |-- core/
+|       |   |-- Emitter.java
+|       |   |-- Observable.java
+|       |   |-- Observer.java
+|       |   `-- SafeObserver.java
+|       |-- disposable/
+|       |   |-- AtomicDisposable.java
+|       |   `-- Disposable.java
+|       `-- schedulers/
+|           |-- Scheduler.java
+|           `-- Schedulers.java
+`-- test/java/
+    `-- rx/
+        `-- RxTests.java
+run.sh
+run.cmd
+run.ps1
 ```
-
----
 
 ## Архитектура системы
 
-### Паттерн «Наблюдатель» (Observer pattern)
+### Observer pattern
 
-Ядро библиотеки — это пара `Observable<T>` / `Observer<T>`:
+Ядро библиотеки - пара `Observable<T>` и `Observer<T>`.
 
-```
-Observable<T>  ──subscribe(Observer)──►  Observer<T>
-     │                                        ▲
-     │  хранит OnSubscribe<T>                 │
-     │  (лямбда-источник)             SafeObserver<T>
-     │                                (контракт Rx)
-     └─────────────────────────────────────────┘
-```
-
-`Observable` — **холодный** поток: источник запускается заново для каждого нового подписчика. Это упрощает рассуждения о побочных эффектах.
-
-### SafeObserver и контракт Rx
-
-Rx Grammar определяет, что поток событий должен соответствовать выражению:
-```
-onNext*  (onError | onComplete)?
-```
-Т.е. ноль или более `onNext`, затем не более одного терминального события.
-
-`SafeObserver<T>` является единственным местом, где этот контракт проверяется:
-- Использует `AtomicBoolean terminated` для предотвращения двойного терминального события.
-- Использует `AtomicDisposable` для подавления событий после `dispose()`.
-- Перехватывает исключения из `downstream.onNext()` и перенаправляет их в `onError()`.
-
-Операторы (`map`, `filter`, `flatMap`) не проверяют контракт самостоятельно — они пишут «простой» код и делегируют SafeObserver.
-
-### Оператор цепочки (Operator chaining)
-
-Каждый оператор создаёт **новый** `Observable`, который «оборачивает» предыдущий:
-
-```
-just(1,2,3)          ← источник
-  .filter(x%2==0)    ← Observable A (подписывается на источник)
-  .map(x -> x*x)     ← Observable B (подписывается на A)
-  .subscribe(...)    ← запускает сборку цепочки снизу вверх
+```text
+Observable<T> --subscribe(Observer)--> Observer<T>
+     |                                  ^
+     | хранит OnSubscribe<T>            |
+     | источник событий                 |
+     `-------------------------- SafeObserver<T>
 ```
 
-Цепочка строится лениво — ничего не выполняется до вызова `subscribe()`.
+`Observable` реализован как холодный поток: источник начинает работу только после
+`subscribe()` и запускается заново для каждого подписчика. Это делает поведение
+предсказуемым и упрощает тестирование.
 
-### Emitter vs Observer
+`Observer<T>` содержит три метода:
 
-`Emitter<T>` — чистый API для пользовательского кода внутри `Observable.create()`.  
-`Observer<T>` — контракт для потребителей потока.  
-Оба выглядят похоже, но разделены намеренно: пользователь пишет через `Emitter`, а `SafeObserver` является посредником между `Emitter` и нижестоящим `Observer`.
+- `onNext(T item)` - получение очередного элемента;
+- `onError(Throwable t)` - получение ошибки;
+- `onComplete()` - успешное завершение потока.
 
----
+`Emitter<T>` используется внутри `Observable.create(...)`. Он похож на `Observer`, но
+предназначен для пользовательского кода, который эмитирует события.
 
-## Schedulers: принципы работы и различия
+### SafeObserver и Rx-контракт
 
-### Интерфейс
+Поток событий должен соответствовать правилу:
+
+```text
+onNext* (onError | onComplete)?
+```
+
+То есть после `onError` или `onComplete` новые события не должны попадать подписчику.
+За это отвечает `SafeObserver<T>`:
+
+- хранит `AtomicBoolean terminated` и не допускает повторных терминальных событий;
+- содержит `AtomicDisposable`, который подавляет доставку после `dispose()`;
+- перехватывает исключения из `onNext` и переводит их в `onError`;
+- ошибки из терминальных обработчиков отправляет в `UncaughtExceptionHandler`.
+
+### Observable
+
+`Observable<T>` хранит функциональный источник `OnSubscribe<T>`. Все операторы создают
+новый `Observable`, который оборачивает предыдущий. Цепочка собирается лениво: до
+вызова `subscribe()` ничего не выполняется.
+
+Пример:
+
+```java
+Observable.just(1, 2, 3, 4)
+    .filter(x -> x % 2 == 0)
+    .map(x -> x * x)
+    .subscribe(System.out::println);
+```
+
+## Реализованные операторы
+
+### map
+
+`map(Function<? super T, ? extends R> mapper)` преобразует каждый элемент потока.
+Если функция выбрасывает исключение, оно передается в `onError`.
+
+```java
+Observable.just(1, 2, 3)
+    .map(x -> "item-" + x)
+    .subscribe(System.out::println);
+```
+
+### filter
+
+`filter(Predicate<? super T> predicate)` пропускает только элементы, для которых
+предикат вернул `true`. Исключение из предиката также передается в `onError`.
+
+```java
+Observable.just(1, 2, 3, 4)
+    .filter(x -> x % 2 == 0)
+    .subscribe(System.out::println);
+```
+
+### flatMap
+
+`flatMap(Function<? super T, ? extends Observable<? extends R>> mapper)` превращает
+каждый элемент во внутренний `Observable` и передает его элементы дальше. В этой
+учебной реализации внутренние потоки обрабатываются последовательно, что дает
+детерминированный порядок событий.
+
+```java
+Observable.just("Alice", "Bob")
+    .flatMap(name -> Observable.just(name + "-1", name + "-2"))
+    .subscribe(System.out::println);
+```
+
+## Schedulers
+
+Планировщик описан интерфейсом:
 
 ```java
 public interface Scheduler {
@@ -92,169 +159,111 @@ public interface Scheduler {
 }
 ```
 
-Простота — намеренная: `Scheduler` не знает о `Observable`, он только выполняет задачи.
+Он не зависит от `Observable` и занимается только запуском `Runnable`.
 
-### Три реализации
+| Scheduler | Основа | Назначение |
+|---|---|---|
+| `IOThreadScheduler` | `Executors.newCachedThreadPool()` | I/O-задачи: сеть, диск, база данных |
+| `ComputationScheduler` | `Executors.newFixedThreadPool(nCPU)` | CPU-bound вычисления |
+| `SingleThreadScheduler` | `Executors.newSingleThreadExecutor()` | последовательная обработка и работа с состоянием |
 
-| Scheduler | Пул потоков | Назначение | Риски |
-|---|---|---|---|
-| `IOThreadScheduler` | `Executors.newCachedThreadPool()` | Ввод-вывод: сеть, диск, БД | При шторме запросов может создать тысячи потоков |
-| `ComputationScheduler` | `Executors.newFixedThreadPool(nCPU)` | CPU-bound: вычисления в памяти | Блокирующие задачи «голодят» ядра |
-| `SingleThreadScheduler` | `Executors.newSingleThreadExecutor()` | Последовательная обработка, состояние | Узкое горлышко при высокой нагрузке |
+### subscribeOn
 
-### subscribeOn — где работает источник
-
-```java
-observable
-  .subscribeOn(Schedulers.io())  // источник запускается в IO-потоке
-  .subscribe(observer);
-```
-
-`subscribeOn` оборачивает вызов `source.subscribe(downstream)` в `scheduler.execute(...)`. Имеет эффект только **один раз** на цепочку — самый близкий к источнику `subscribeOn` «побеждает».
-
-### observeOn — где работает наблюдатель
+`subscribeOn(Scheduler scheduler)` переносит выполнение источника в указанный
+планировщик.
 
 ```java
-observable
-  .observeOn(Schedulers.single())  // каждый onNext/onError/onComplete → в single-поток
-  .subscribe(observer);
-```
-
-`observeOn` оборачивает каждый вызов `downstream.onNext/onError/onComplete` в `scheduler.execute(...)`. В отличие от `subscribeOn`, **каждый** `observeOn` в цепочке вводит границу смены потока.
-
-### Типичный паттерн
-
-```
-IO-поток:         [source]──onNext──►[map]
-                                         │
-                                    observeOn
-                                         │
-Single-поток:                        [observer]
-```
-
----
-
-## Операторы
-
-### map(Function)
-Применяет функцию к каждому элементу. Исключение из функции → `onError`.
-
-### filter(Predicate)
-Пропускает только элементы, для которых предикат возвращает `true`. Исключение → `onError`.
-
-### flatMap(Function → Observable)
-Для каждого элемента создаёт внутренний `Observable`, подписывается на него синхронно и передаёт все его элементы дальше. Реализует **concat-семантику** (последовательная подписка) для простоты и детерминированного порядка.
-
----
-
-## Обработка ошибок
-
-1. **Исключение в источнике** (`create`-лямбда): перехватывается в `Observable.subscribe()` и направляется в `safeObserver.onError()`.
-2. **Исключение в операторе** (`map`, `filter`): перехватывается внутри оператора и направляется в `downstream.onError()`.
-3. **Терминальность**: после первого `onError` дальнейшие события не доставляются (`SafeObserver`).
-4. **Исключение в `onError` наблюдателя**: передаётся в `Thread.UncaughtExceptionHandler` (как в RxJava 2+), чтобы не потерять информацию об ошибке.
-
----
-
-## Disposable и отмена подписки
-
-```java
-Disposable d = observable.subscribe(observer);
-d.dispose(); // прекращает доставку событий
-```
-
-`AtomicDisposable` — потокобезопасная реализация на `AtomicBoolean`. `SafeObserver` проверяет `isDisposed()` перед каждым `onNext`.
-
-**Важный нюанс с синхронными источниками**: если источник `Observable.create(...)` не использует `subscribeOn`, он выполняется целиком внутри вызова `subscribe()`, до того как этот вызов вернёт `Disposable`. Поэтому отмену из `onNext`-обработчика нужно реализовывать через внешний `AtomicBoolean`-флаг, который источник сам проверяет. При асинхронных источниках (с `subscribeOn`) `Disposable` доступен до начала доставки элементов.
-
----
-
-## Тестирование
-
-### Запуск
-
-```bash
-bash run.sh
-```
-
-Тесты написаны без внешних зависимостей (JUnit не используется): каждый тест — статический метод, регистрируемый вручную в `main`. Провальный тест не останавливает прогон.
-
-### Покрытые сценарии (24 теста)
-
-**Блок 1 — Базовые компоненты**
-- `just` эмитирует элементы в порядке
-- `create` эмитирует и завершается
-- `empty` вызывает только `onComplete`
-- `error` вызывает только `onError`
-- `fromIterable` обходит коллекцию
-
-**Блок 2 — Операторы**
-- `map` преобразует каждый элемент
-- `map` направляет исключение в `onError`
-- `filter` пропускает подходящие элементы
-- `filter` удаляет неподходящие
-- `flatMap` разворачивает каждый элемент
-- `flatMap` с ошибкой во внутреннем Observable
-- Цепочка `filter → map → flatMap`
-
-**Блок 3 — Disposable**
-- Синхронный источник + флаг отмены
-- Асинхронный источник + `dispose()` из `onNext`
-- `SafeObserver`: нет событий после `onComplete`
-- `SafeObserver`: нет событий после `onError`
-
-**Блок 4 — Обработка ошибок**
-- Исключение в источнике → `onError`
-- Исключение в `map` → `onError`
-- Исключение в `filter` → `onError`
-
-**Блок 5 — Schedulers**
-- `subscribeOn`: источник работает в другом потоке
-- `observeOn`: наблюдатель получает события в другом потоке
-- `subscribeOn` + `observeOn`: каждый в своём потоке
-- `ComputationScheduler`: параллелизм ≤ nCPU
-- `SingleThreadScheduler`: порядок выполнения сохраняется
-
-### Примеры использования
-
-```java
-// 1. Простая трансформация
-Observable.just(1, 2, 3, 4, 5)
-    .filter(x -> x % 2 == 0)
-    .map(x -> "even: " + x)
-    .subscribe(System.out::println);
-
-// 2. Асинхронный I/O с переключением потоков
-Observable.<String>create(emitter -> {
-    emitter.onNext(readFromNetwork());
+Observable.<Integer>create(emitter -> {
+    emitter.onNext(1);
     emitter.onComplete();
 })
 .subscribeOn(Schedulers.io())
-.map(String::toUpperCase)
-.observeOn(Schedulers.single())
-.subscribe(
-    item  -> updateUI(item),
-    error -> showError(error),
-    ()    -> hideSpinner()
-);
+.subscribe(System.out::println);
+```
 
-// 3. flatMap для развёртки
-Observable.just("Alice", "Bob")
-    .flatMap(name -> Observable.just(name + "-1", name + "-2"))
+### observeOn
+
+`observeOn(Scheduler scheduler)` переносит вызовы `onNext`, `onError` и `onComplete`
+на указанный планировщик.
+
+```java
+Observable.just(1, 2, 3)
+    .observeOn(Schedulers.single())
     .subscribe(System.out::println);
-// Alice-1, Alice-2, Bob-1, Bob-2
+```
 
-// 4. Обработка ошибок
+Типичный сценарий: источник выполняется в `IOThreadScheduler`, вычисления остаются в
+цепочке операторов, а финальная обработка переводится в `SingleThreadScheduler`.
+
+## Disposable
+
+`Disposable` позволяет отменить подписку:
+
+```java
+Disposable disposable = observable.subscribe(System.out::println);
+disposable.dispose();
+```
+
+`AtomicDisposable` реализован через `AtomicBoolean`, поэтому безопасен для
+многопоточных сценариев. `SafeObserver` проверяет состояние перед доставкой событий.
+
+В синхронных источниках `subscribe()` возвращает `Disposable` уже после выполнения
+источника. Поэтому для демонстрации ранней остановки синхронного источника используется
+внешний флаг, а для асинхронного источника - `subscribeOn`, где `Disposable` доступен
+до доставки следующих элементов.
+
+## Обработка ошибок
+
+Реализованы основные сценарии:
+
+- исключение в `Observable.create(...)` перехватывается и передается в `onError`;
+- исключения в `map` и `filter` передаются в `onError`;
+- после первого `onError` или `onComplete` новые события не доставляются;
+- ошибка из `onNext` подписчика также переводится в `onError`.
+
+Пример:
+
+```java
 Observable.just("10", "bad", "30")
     .map(Integer::parseInt)
     .subscribe(
-        item  -> System.out.println("parsed: " + item),
-        error -> System.out.println("error: " + error.getMessage())
+        item -> System.out.println("parsed: " + item),
+        error -> System.out.println("error: " + error.getMessage()),
+        () -> System.out.println("complete")
     );
-// parsed: 10
-// error: For input string: "bad"
+```
 
-// 5. CompletableFuture-стиль через submit() (из ThreadPool-задания)
-CompletableFuture.supplyAsync(() -> heavyComputation(), Schedulers.computation()::execute);
-``` 
- 
+## Тестирование
+
+Тесты находятся в `src/test/java/rx/RxTests.java`. Они написаны без внешних
+зависимостей, чтобы проект можно было проверить обычными `javac` и `java`.
+
+Покрытые сценарии:
+
+- создание потоков через `create`, `just`, `empty`, `error`, `fromIterable`;
+- операторы `map`, `filter`, `flatMap` и их цепочки;
+- доставка ошибок из источника и операторов;
+- контракт `SafeObserver`: нет событий после `onError` и `onComplete`;
+- отмена подписки через `Disposable`;
+- работа `subscribeOn` и `observeOn`;
+- ограничения `ComputationScheduler`;
+- последовательность выполнения в `SingleThreadScheduler`.
+
+Последний локальный прогон:
+
+```text
+Results: 24 passed, 0 failed
+```
+
+## Демонстрация
+
+`demo.Demo` показывает:
+
+- простую цепочку `filter + map`;
+- создание собственного источника через `Observable.create`;
+- разворачивание элементов через `flatMap`;
+- обработку ошибок;
+- отмену подписки;
+- `subscribeOn` и `observeOn`;
+- параллельные задачи на `ComputationScheduler`;
+- комбинированный сценарий с IO-источником и single-подписчиком.
